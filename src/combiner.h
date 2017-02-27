@@ -30,11 +30,6 @@ struct combine_message {
     struct message_metadata _meta;
 };
 
-/// This tag can be used to check on the results of an asynchronous message
-struct async_message_tag {
-    struct message_metadata *p;
-};
-
 /// Acquires the combiner like a normal lock
 void lock_combiner(struct combiner* lck);
 
@@ -52,15 +47,16 @@ void message_combiner(struct combiner* lck,
                       struct combine_message *msg);
 
 /// Performs the actions described in the msg struct, but does not block.
-/// Instead, a tag is returned which can be used to block on later.
-/// This allows other work to be performed in the time
-struct async_message_tag async_message_combiner(struct combiner* lck,
-                                                struct combine_message *msg);
+/// Instead, the message can be queried for status and blocked on until completion
+void async_message_combiner(struct combiner* lck,
+                            struct combine_message *msg);
 
 /// Returns the status of an asynchronous message
-int async_message_status(struct async_message_tag* t);
+int async_message_status(struct combine_message* msg);
 
 /// Blocks on an async message tag until completion
-void complete_async_message(struct async_message_tag* t);
+void complete_async_message(struct combine_message* msg);
+
+void init_combiner(struct combiner *cmb);
 
 #endif

@@ -1,6 +1,7 @@
 #include "combiner.h"
 
 #include <stddef.h>
+#include <string.h>
 
 #define container_of(ptr, type, member) ({                      \
         typeof( ((type *)0)->member ) *__mptr = (ptr);    \
@@ -29,12 +30,12 @@ void lock_combiner(struct combiner* cmb) {
     /// busywait is temp! Will do actual locking down the line
     do {
         while (__atomic_load_n(&cmb->locked, __ATOMIC_RELAXED));
-    } while (__atomic_test_and_set(&cmb->locked, __ATOMIC_ACQUIRE));
+    } while (!__atomic_test_and_set(&cmb->locked, __ATOMIC_ACQUIRE));
 }
 
 int try_lock_combiner(struct combiner* cmb) {
     return !__atomic_load_n(&cmb->locked, __ATOMIC_RELAXED)
-           && __atomic_test_and_set(&cmb->locked, __ATOMIC_ACQUIRE);
+           && !__atomic_test_and_set(&cmb->locked, __ATOMIC_ACQUIRE);
 }
 
 void unlock_combiner(struct combiner* cmb) {
@@ -47,6 +48,15 @@ void unlock_combiner_now(struct combiner* cmb) {
 
 void message_combiner(struct combiner* cmb,
                       struct combine_message* msg) {
+    async_message_combiner(cmb, msg);
+    complete_async_message(msg);
+}
+
+
+void async_message_combiner(struct combiner* cmb,
+                            struct combine_message *msg) {
+    msg->_meta.is_done = 0;
+    msg->_meta.next = NULL;
     if (try_lock_combiner(cmb)) {
         run_msg(msg);
         msg->_meta.is_done = 1;
@@ -57,12 +67,20 @@ void message_combiner(struct combiner* cmb,
         if (try_lock_combiner(cmb)) {
             do_unlock_combiner(cmb, !__atomic_load_n(&msg->_meta.is_done, __ATOMIC_ACQUIRE));
         }
-        else {
-            // TODO: Pause
-            while (!__atomic_load_n(&msg->_meta.is_done, __ATOMIC_RELAXED));
-            __atomic_thread_fence(__ATOMIC_ACQUIRE);
-        }
     }
+}
+
+void init_combiner(struct combiner *cmb) {
+    memset(cmb, 0, sizeof(*cmb));
+}
+
+int async_message_status(struct combine_message *msg) {
+    !__atomic_load_n(&msg->_meta.is_done, __ATOMIC_RELAXED);
+}
+
+void complete_async_message(struct combine_message *msg) {
+    while (!__atomic_load_n(&msg->_meta.is_done, __ATOMIC_RELAXED));
+    __atomic_thread_fence(__ATOMIC_ACQUIRE);
 }
 
 static void prefetch(void *p) {
