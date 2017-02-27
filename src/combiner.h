@@ -10,6 +10,7 @@ typedef void (*combine_fn)(struct combine_message *msg);
 struct combiner {
     struct message_metadata *head;
     char locked;
+    char combiner_spin;
 };
 
 struct message_metadata {
@@ -48,6 +49,7 @@ void message_combiner(struct combiner* lck,
 
 /// Performs the actions described in the msg struct, but does not block.
 /// Instead, the message can be queried for status and blocked on until completion
+/// Be wary of cache contention on the stack when using this
 void async_message_combiner(struct combiner* lck,
                             struct combine_message *msg);
 
@@ -55,7 +57,7 @@ void async_message_combiner(struct combiner* lck,
 int async_message_status(struct combine_message* msg);
 
 /// Blocks on an async message tag until completion
-void complete_async_message(struct combine_message* msg);
+void complete_async_message(struct combiner *cmb, struct combine_message *msg);
 
 void init_combiner(struct combiner *cmb);
 

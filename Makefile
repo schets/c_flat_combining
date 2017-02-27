@@ -1,2 +1,2 @@
 all:
-	gcc src/*.c -std=gnu99 -lpthread
+	gcc src/*.c -std=gnu99 -lpthread -g
