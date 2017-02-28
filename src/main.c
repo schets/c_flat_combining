@@ -14,7 +14,7 @@ typedef struct {
 int val;
 int num_run = 10000;
 
-#define N_THREADS 2
+#define N_THREADS 1
 
 void inc_val(struct combine_message *val) {
     locked_val_msg *msg = (locked_val_msg *)val;

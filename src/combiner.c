@@ -2,6 +2,7 @@
 
 #include <stddef.h>
 #include <string.h>
+#include <stdio.h>
 
 #define container_of(ptr, type, member) ({                          \
             typeof( ((type *)0)->member ) *__mptr = (ptr);          \
@@ -27,7 +28,8 @@ static void perform_work(struct combiner* cmb);
 static void run_msg(struct combine_message *msg);
 static void prefetch_meta(struct message_metadata *msg);
 static struct message_metadata *next_list(struct message_metadata **msg,
-                                          struct message_metadata *head);
+                                          struct message_metadata *head,
+                                          int advance_end);
 
 void message_combiner(struct combiner* cmb,
                       struct combine_message* msg) {
@@ -39,36 +41,38 @@ void message_combiner(struct combiner* cmb,
 void async_message_combiner(struct combiner* cmb,
                             struct combine_message *msg) {
     msg->_meta.is_done = 0;
-    enter_combiner(cmb, msg);
+    if (enter_combiner(cmb, msg)) {
+        do_unlock_combiner(cmb, 1);
+    }
 }
 
-    void init_combiner(struct combiner *cmb) {
-        memset(cmb, 0, sizeof(*cmb));
+void init_combiner(struct combiner *cmb) {
+    memset(cmb, 0, sizeof(*cmb));
+}
+
+int async_message_status(struct combine_message *msg) {
+    !__atomic_load_n(&msg->_meta.is_done, __ATOMIC_RELAXED);
+}
+
+void complete_async_message(struct combiner *cmb, struct combine_message *msg) {
+    int val;
+    while (!(val = __atomic_load_n(&msg->_meta.is_done, __ATOMIC_RELAXED)));
+    __atomic_thread_fence(__ATOMIC_ACQUIRE);
+    if (val == Finished) {
+        return;
     }
-
-    int async_message_status(struct combine_message *msg) {
-        !__atomic_load_n(&msg->_meta.is_done, __ATOMIC_RELAXED);
+    else {
+        do_unlock_combiner(cmb, 1);
     }
-
-    void complete_async_message(struct combiner *cmb, struct combine_message *msg) {
-        int val;
-        while (!(val = __atomic_load_n(&msg->_meta.is_done, __ATOMIC_RELAXED)));
-        __atomic_thread_fence(__ATOMIC_ACQUIRE);
-        if (val == Finished) {
-            return;
-        }
-        else {
-            do_unlock_combiner(cmb, 1);
-        }
-    }
+}
 
 
 
-    static void prefetch(void *p) {
-        __builtin_prefetch(p, 0, 3);
-    }
+static void prefetch(void *p) {
+    __builtin_prefetch(p, 0, 3);
+}
 
-    static void do_unlock_combiner(struct combiner* cmb, int do_work) {
+static void do_unlock_combiner(struct combiner* cmb, int do_work) {
     if (do_work) {
         perform_work(cmb);
     }
@@ -78,7 +82,8 @@ void async_message_combiner(struct combiner* cmb,
 
 static void notify_waiters(struct combiner* cmb) {
     struct message_metadata *next = next_list(&cmb->queue,
-                                              __atomic_load_n(&cmb->queue, __ATOMIC_CONSUME));
+                                              __atomic_load_n(&cmb->queue, __ATOMIC_CONSUME),
+                                              1);
     if (next != NULL) {
         __atomic_store_n(&next->is_done, TakeOver, __ATOMIC_RELEASE);
     }
@@ -90,6 +95,7 @@ static int enter_combiner(struct combiner *cmb, struct combine_message *msg) {
     struct message_metadata *prev = __atomic_exchange_n(&cmb->queue, &msg->_meta, __ATOMIC_ACQ_REL);
 
     if (prev != NULL) {
+        printf("NotNull\n");
         __atomic_store_n(&prev->next, &msg->_meta, __ATOMIC_RELEASE);
     }
     return prev == NULL;
@@ -100,7 +106,7 @@ static void perform_work(struct combiner* cmb) {
 
     struct message_metadata *head = __atomic_load_n(&cmb->queue, __ATOMIC_CONSUME);
     while (head) {
-        struct message_metadata* next = next_list(&cmb->queue, head);
+        struct message_metadata* next = next_list(&cmb->queue, head, 0);
         struct combine_message *cur_msg = container_of(head, struct combine_message, _meta);
         prefetch_meta(next);
         run_msg(cur_msg);
@@ -122,11 +128,13 @@ static void prefetch_meta(struct message_metadata *msg) {
 }
 
 static struct message_metadata *next_list(struct message_metadata **queue,
-                                          struct message_metadata *head) {
+                                          struct message_metadata *head,
+                                          int advance_end) {
     struct message_metadata *next = __atomic_load_n(&head->next, __ATOMIC_CONSUME);
     if (next == NULL) {
-        if (__atomic_compare_exchange_n(queue, head, NULL, 1,
-                                        __ATOMIC_RELEASE, __ATOMIC_RELAXED)) {
+        if (!advance_end
+            || __atomic_compare_exchange_n(queue, &head, NULL, 1,
+                                           __ATOMIC_RELEASE, __ATOMIC_RELAXED)) {
             return NULL;
         }
         else {
