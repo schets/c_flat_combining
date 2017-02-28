@@ -13,8 +13,9 @@ typedef struct {
 
 int val;
 int num_run = 10000;
+int tid = 0;
 
-#define N_THREADS 1
+#define N_THREADS 4
 
 void inc_val(struct combine_message *val) {
     locked_val_msg *msg = (locked_val_msg *)val;
@@ -23,6 +24,8 @@ void inc_val(struct combine_message *val) {
 }
 
 void *perform_incs(void *data) {
+    int mtid = __atomic_fetch_add(&tid, 1, __ATOMIC_SEQ_CST);
+    printf("Entering %d\n", tid);
     struct combiner *cmb = data;
     for (int i = 0; i < num_run; i++) {
         locked_val_msg m;
@@ -31,8 +34,8 @@ void *perform_incs(void *data) {
         m.val = &val;
         m.rval = -1;
         message_combiner(cmb, &m.msg);
-        printf("%d\n", m.rval);
     }
+    printf("Exiting %d\n", tid);
     return NULL;
 }
 
@@ -48,5 +51,6 @@ int main(int argc, char** argv) {
     for (int i = 0; i < N_THREADS; i++) {
         pthread_join(threads[i], NULL);
     }
+    printf("%d\n", val);
     assert(val == N_THREADS * num_run);
 }
