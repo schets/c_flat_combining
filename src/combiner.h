@@ -8,9 +8,7 @@ typedef void (*combine_fn)(struct combine_message *msg);
 
 /// This struct holds the flat-combining lock
 struct combiner {
-    struct message_metadata *head;
-    char locked;
-    char combiner_spin;
+    struct message_metadata *queue;
 };
 
 struct message_metadata {
@@ -30,18 +28,6 @@ struct combine_message {
     /// Metadata used by the lock, DO NOT TOUCH
     struct message_metadata _meta;
 };
-
-/// Acquires the combiner like a normal lock
-void lock_combiner(struct combiner* lck);
-
-/// Attempts to lock the combiner, returns nonzero on success
-int try_lock_combiner(struct combiner* lck);
-
-/// Releases the combiner lock and helps waiting threads
-void unlock_combiner(struct combiner* lck);
-
-/// Releases the combiner thread without helping waiting threasd
-void unlock_combiner_now(struct combiner *lck);
 
 /// Performs the actions described in the msg struct, blocks until completion
 void message_combiner(struct combiner* lck,
