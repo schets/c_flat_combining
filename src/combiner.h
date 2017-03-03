@@ -8,51 +8,47 @@ typedef void (*combine_fn)(struct combine_message *msg);
 
 /// This struct holds the flat-combining lock
 struct combiner {
-    struct message_metadata *queue;
+  struct message_metadata *queue;
 };
 
 struct message_metadata {
-    struct message_metadata *next;
-    int is_done;
+  struct message_metadata *next;
+  int is_done;
 };
 
 /// This struct describes the actions to perform when inside the lock
 struct combine_message {
 
-    /// Function to call when inside the lock
-    combine_fn operation;
+  /// Function to call when inside the lock
+  combine_fn operation;
 
-    /// Address of data to prefetch. Can be null
-    void *prefetch;
+  /// Address of data to prefetch. Can be null
+  void *prefetch;
 
-    /// Metadata used by the lock, DO NOT TOUCH
-    struct message_metadata _meta;
+  /// Metadata used by the lock, DO NOT TOUCH
+  struct message_metadata _meta;
 };
 
 /// Acquires unique access to the combiner like a mutex
 /// The passed message does not need any initialization,
 /// space is provided simply for the lock. Storing this outside the queue
 /// has some nice cache benefits.
-void lock_combiner(struct combiner* lck,
-                   struct combine_message *msg);
-
+void lock_combiner(struct combiner *lck, struct combine_message *msg);
 
 /// Unlocks the combiner that was locked with the tag
-void unlock_combiner(struct combiner* lck,
-                     struct combine_message *msg);
+void unlock_combiner(struct combiner *lck, struct combine_message *msg);
 
 /// Performs the actions described in the msg struct, blocks until completion
-void message_combiner(struct combiner* lck,
-                      struct combine_message *msg);
+void message_combiner(struct combiner *lck, struct combine_message *msg);
 
 /// Performs the actions described in the msg struct, but does not block.
-/// Instead, the message can be queried for status and blocked on until completion
+/// Instead, the message can be queried for status and blocked on until
+/// completion
 /// Be wary of cache contention on the stack when using this
-void async_message_combiner(struct combiner* lck,
-                            struct combine_message *msg);
+void async_message_combiner(struct combiner *lck, struct combine_message *msg);
 
 /// Returns the status of an asynchronous message
-int async_message_status(struct combine_message* msg);
+int async_message_status(struct combine_message *msg);
 
 /// Blocks on an async message tag until completion
 void complete_async_message(struct combiner *cmb, struct combine_message *msg);
