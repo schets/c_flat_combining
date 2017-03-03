@@ -2,7 +2,6 @@
 
 #include <assert.h>
 #include <stddef.h>
-#include <stdio.h>
 #include <string.h>
 
 #define container_of(ptr, type, member)                                        \
@@ -10,6 +9,20 @@
     typeof(((type *)0)->member) *__mptr = (ptr);                               \
     (type *)((char *)__mptr - offsetof(type, member));                         \
   })
+
+// For Intel, Arm, Power, Sparc, Mips, Power only currently
+// Since compilers conservatively have consume be acquire in
+// case of bizzare avoidance of optimized-away data dependencies
+// But I would rather be conservative and whitelist architectures instead
+#if (defined __amd64__) || (defined __arm__) || (defined __thumb__) ||         \
+    (defined __aarch64__) || (defined __i386__) || (defined __sparc__) ||      \
+    (defined __mips__) || (defined __powerpc__) || (defined __powerpc64__)
+#define ARCH_CONSUME __ATOMIC_RELAXED
+#else
+#define ARCH_CONSUME __ATOMIC_CONSUME
+#endif
+
+#define next_list(ptr) __atomic_load_n(&ptr->next, ARCH_CONSUME)
 
 enum { Waiting = 0, TakeOver = 1, Finished = 2 };
 
@@ -32,13 +45,17 @@ struct message_metadata *perform_work(struct combiner *cmb,
 // Msg Functions
 static void prefetch_meta(struct message_metadata *msg);
 
-static struct message_metadata *next_list(struct message_metadata **msg,
-                                          struct message_metadata *head,
-                                          int advance_end);
+static struct message_metadata *advance(struct message_metadata **msg,
+                                        struct message_metadata *head);
+
+static void remove_from_queue(struct message_metadata **queue,
+                              struct message_metadata *start,
+                              struct message_metadata *find);
 
 void lock_combiner(struct combiner *cmb, struct combine_message *msg) {
   msg->operation = NULL;
   msg->_meta.is_done = 0;
+  msg->_meta.blocking_status = 0;
   if (enter_combiner(cmb, &msg->_meta)) {
     return;
   }
@@ -54,6 +71,7 @@ void unlock_combiner(struct combiner *cmb, struct combine_message *tag) {
 }
 
 void message_combiner(struct combiner *cmb, struct combine_message *msg) {
+  msg->_meta.blocking_status = 0;
   async_message_combiner(cmb, msg);
   complete_async_message(cmb, msg);
 }
@@ -94,10 +112,14 @@ void do_unlock_combiner(struct combiner *cmb, struct message_metadata *head,
 }
 
 void notify_waiters(struct combiner *cmb, struct message_metadata *stop_at) {
-  struct message_metadata *next = next_list(&cmb->queue, stop_at, 1);
-  __atomic_thread_fence(__ATOMIC_ACQ_REL);
+  // advance past stop_at definitvely, this must be done before we release
+  // stop_at from the queue
+  struct message_metadata *next = advance(&cmb->queue, stop_at);
   __atomic_store_n(&stop_at->is_done, Finished, __ATOMIC_RELAXED);
   if (next != NULL) {
+    // This is fine without an acquire fence - in the case of not
+    // returning null, next is loaded with at least consume ordering
+    // and this holds a data dependency on next
     __atomic_store_n(&next->is_done, TakeOver, __ATOMIC_RELAXED);
   }
 }
@@ -106,7 +128,7 @@ int enter_combiner(struct combiner *cmb, struct message_metadata *msg) {
   msg->next = NULL;
 
   struct message_metadata *prev =
-      __atomic_exchange_n(&cmb->queue, msg, __ATOMIC_ACQ_REL);
+      __atomic_exchange_n(&cmb->queue, msg, __ATOMIC_RELEASE);
 
   if (prev != NULL) {
     __atomic_store_n(&prev->next, msg, __ATOMIC_RELEASE);
@@ -122,8 +144,7 @@ struct message_metadata *perform_work(struct combiner *cmb,
 
   int nrun = 0;
   do {
-    struct message_metadata *next;
-    next = next_list(&cmb->queue, head, 0);
+    struct message_metadata *next = next_list(head);
     struct combine_message *cur_msg =
         container_of(head, struct combine_message, _meta);
     if (nrun < MAX_RUN || cur_msg->operation != NULL) {
@@ -132,10 +153,8 @@ struct message_metadata *perform_work(struct combiner *cmb,
       cur_msg->operation(cur_msg);
       // We only update the previous since the current head may be used later on
       // This doesn't need to special case for there only being one item because
-      // as of now,
-      // the first item will always be the current thread's node from list entry
-      // or
-      // take over
+      // as of now, the first item will always be the current thread's node from
+      // list entry or take over
       __atomic_store_n(&prev->is_done, Finished, __ATOMIC_RELEASE);
       prev = head;
     } else {
@@ -157,22 +176,66 @@ static void prefetch_meta(struct message_metadata *msg) {
   }
 }
 
-struct message_metadata *next_list(struct message_metadata **queue,
-                                   struct message_metadata *head,
-                                   int advance_end) {
-  struct message_metadata *next =
-      __atomic_load_n(&head->next, __ATOMIC_CONSUME);
+struct message_metadata *advance(struct message_metadata **queue,
+                                 struct message_metadata *head) {
+  struct message_metadata *next = next_list(head);
+  __atomic_thread_fence(__ATOMIC_ACQ_REL);
   if (next == NULL) {
-    __atomic_thread_fence(__ATOMIC_ACQUIRE);
     struct message_metadata *tmp_head = head;
-    if (!advance_end ||
-        __atomic_compare_exchange_n(queue, &tmp_head, NULL, 1, __ATOMIC_RELEASE,
+    if (__atomic_compare_exchange_n(queue, &tmp_head, NULL, 1, __ATOMIC_RELAXED,
                                     __ATOMIC_RELAXED)) {
       next = NULL;
     } else {
-      while (!(next = __atomic_load_n(&head->next, __ATOMIC_CONSUME)))
+      while (!(next = next_list(head)))
         ;
     }
   }
   return next;
+}
+
+static void remove_from_queue(struct message_metadata **queue,
+                              struct message_metadata *start,
+                              struct message_metadata *find) {
+  // Do the work to be found
+  struct combine_message *cur_msg =
+      container_of(find, struct combine_message, _meta);
+  cur_msg->operation(cur_msg);
+  find->is_done = Finished;
+
+  // Find the previous pointer in the list to this one
+  struct message_metadata *prev = NULL;
+  for (; start != find; prev = start, start = next_list(start))
+    ;
+
+  assert(start == find);
+  if (prev == NULL) {
+    // find is the first in the queue, we can advance it like any other
+    advance(queue, find);
+  } else {
+    assert(prev->next == find);
+    struct message_metadata *next = next_list(find);
+    if (next) {
+      // Find is internal to the list, and we dont need to worry about
+      // advancing the head. There's a data dependency on next, so we're
+      // good without a fence
+      __atomic_store_n(&prev->next, next, __ATOMIC_RELEASE);
+    } else {
+      // This is only ever read by the thread holding the lock
+      // so It's ok if this store is ordered-before the read
+      prev->next = NULL;
+      struct message_metadata *tmp_find = find;
+      // Since find->next was null, we expect *queue to equal find.
+      // If this is still true, then we CAS *queue to find prev.
+      // If the cas succeeds, all is well. If it fails, we must
+      // wait for the next ptr of find to get set and then set prev accordingly
+      if (!__atomic_compare_exchange_n(queue, &tmp_find, prev, 1,
+                                       __ATOMIC_RELEASE, __ATOMIC_RELAXED)) {
+        // CAS failed, wait for find->next and then go bananas
+        while (!(next = next_list(find)))
+          ;
+        // Ordered after next_list due to consume and data dependency
+        __atomic_store_n(&prev->next, next, __ATOMIC_RELAXED);
+      }
+    }
+  }
 }
