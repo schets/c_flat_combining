@@ -9,14 +9,14 @@ typedef void (*combine_fn)(struct combine_message *msg);
 /// This struct holds the flat-combining lock
 struct combiner {
   struct message_metadata *queue;
-  struct message_metadata *take_over;
   int try_takeover;
 };
 
 struct message_metadata {
   struct message_metadata *next;
+  struct message_metadata *prev;
+  struct message_metadata *is_done;
   int blocking_status;
-  int is_done;
 };
 
 /// This struct describes the actions to perform when inside the lock

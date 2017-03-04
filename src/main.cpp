@@ -30,7 +30,7 @@ void add_queue(struct combine_message *val) {
 
 void *perform_incs(void *data) {
     int mtid = __atomic_fetch_add(&tid, 1, __ATOMIC_SEQ_CST);
-    printf("Entering %d\n", tid);
+    printf("Entering %d\n", mtid);
     std::random_device r;
     std::mt19937_64 rng(r());
     struct combiner *cmb = (struct combiner *)data;
@@ -39,7 +39,7 @@ void *perform_incs(void *data) {
         m.msg.operation = add_queue;
         m.msg.prefetch = &gqueue;
         m.to_add = rng();
-        if (0) {
+        if (1) {
             message_combiner(cmb, &m.msg);
         }
         else {
@@ -49,7 +49,7 @@ void *perform_incs(void *data) {
             unlock_combiner(cmb, &m.msg);
         }
     }
-    printf("Exiting %d\n", tid);
+    printf("Exiting %d\n", mtid);
     return NULL;
 }
 
