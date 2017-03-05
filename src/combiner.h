@@ -15,9 +15,8 @@ struct combiner {
 struct message_metadata {
   struct message_metadata *next;
   struct message_metadata *prev;
-  int is_lock;
-  int blocking_status;
   struct message_metadata *is_done;
+  int blocking_status;
 };
 
 /// This struct describes the actions to perform when inside the lock
@@ -32,15 +31,6 @@ struct combine_message {
   /// Metadata used by the lock, DO NOT TOUCH
   struct message_metadata _meta;
 };
-
-/// Acquires unique access to the combiner like a mutex
-/// The passed message does not need any initialization,
-/// space is provided simply for the lock. Storing this outside the queue
-/// has some nice cache benefits.
-void lock_combiner(struct combiner *lck, struct combine_message *msg);
-
-/// Unlocks the combiner that was locked with the tag
-void unlock_combiner(struct combiner *lck, struct combine_message *msg);
 
 /// Performs the actions described in the msg struct, blocks until completion
 void message_combiner(struct combiner *lck, struct combine_message *msg);

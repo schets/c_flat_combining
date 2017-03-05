@@ -44,15 +44,8 @@ void *perform_incs(void *data) {
     m.msg.prefetch = &gqueue;
     m.was_called = 0;
     m.to_add = rng();
-    if (0) {
-      message_combiner(cmb, &m.msg);
-      assert(m.was_called == 1);
-    } else {
-      lock_combiner(cmb, &m.msg);
-      gqueue.push(m.to_add);
-      gqueue.pop();
-      unlock_combiner(cmb, &m.msg);
-    }
+    message_combiner(cmb, &m.msg);
+    assert(m.was_called == 1);
   }
   printf("Exiting %d\n", mtid);
   return NULL;
