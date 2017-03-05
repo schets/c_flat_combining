@@ -15,8 +15,9 @@ struct combiner {
 struct message_metadata {
   struct message_metadata *next;
   struct message_metadata *prev;
-  struct message_metadata *is_done;
+  int is_lock;
   int blocking_status;
+  struct message_metadata *is_done;
 };
 
 /// This struct describes the actions to perform when inside the lock
