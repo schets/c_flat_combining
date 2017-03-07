@@ -36,7 +36,7 @@ static void unlock_work_combiner(struct combiner *cmb,
                                  struct message_metadata *head,
                                  struct message_metadata *must_finish,
                                  int do_work);
-static int enter_combiner(struct combiner *cmb, struct message_metadata *msg);
+static struct message_metadata *enter_combiner(struct combiner *cmb, struct message_metadata *msg);
 static void notify_waiters(struct combiner *cmb,
                            struct message_metadata *stop_at);
 static struct message_metadata *perform_work(struct message_metadata *head);
@@ -81,8 +81,9 @@ void complete_async_message(struct combiner *cmb, struct combine_message *msg) {
 static void send_async_message(struct combiner *cmb,
                                struct combine_message *msg) {
   msg->_meta.is_done = Waiting;
-  if (enter_combiner(cmb, &msg->_meta)) {
-    unlock_work_combiner(cmb, &msg->_meta, &msg->_meta, 1);
+  struct message_metadata *start_at = enter_combiner(cmb, &msg->_meta);
+  if (start_at) {
+    unlock_work_combiner(cmb, start_at, &msg->_meta, 1);
   }
 }
 
@@ -117,7 +118,7 @@ static void notify_waiters(struct combiner *cmb,
   }
 }
 
-static int enter_combiner(struct combiner *cmb, struct message_metadata *msg) {
+static struct message_metadata *enter_combiner(struct combiner *cmb, struct message_metadata *msg) {
   msg->next = NULL;
 
   struct message_metadata *prev =
@@ -127,8 +128,9 @@ static int enter_combiner(struct combiner *cmb, struct message_metadata *msg) {
   msg->prev = prev;
   if (prev != NULL) {
     __atomic_store_n(&prev->next, msg, __ATOMIC_RELEASE);
+    return NULL;
   }
-  return prev == NULL;
+  return msg;
 }
 
 static struct message_metadata *perform_work(struct message_metadata *head) {
