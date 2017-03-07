@@ -36,7 +36,8 @@ static void unlock_work_combiner(struct combiner *cmb,
                                  struct message_metadata *head,
                                  struct message_metadata *must_finish,
                                  int do_work);
-static struct message_metadata *enter_combiner(struct combiner *cmb, struct message_metadata *msg);
+static struct message_metadata *enter_combiner(struct combiner *cmb,
+                                               struct message_metadata *msg);
 static void notify_waiters(struct combiner *cmb,
                            struct message_metadata *stop_at);
 static struct message_metadata *perform_work(struct message_metadata *head);
@@ -114,11 +115,20 @@ static void notify_waiters(struct combiner *cmb,
     // and this holds a data dependency on next, which must come after
     // advance, which itself has acq_rel ordering
 
-    __atomic_store_n(&next->is_done, next, __ATOMIC_RELAXED);
+    // Search for a pointer which is waiting
+    struct message_metadata *cur;
+    for (cur = next;
+         cur && !__atomic_load_n(&cur->blocking_status, __ATOMIC_RELAXED);
+         cur = next_list(cur))
+      ;
+
+    cur = cur ? cur : next;
+    __atomic_store_n(&cur->is_done, next, __ATOMIC_RELAXED);
   }
 }
 
-static struct message_metadata *enter_combiner(struct combiner *cmb, struct message_metadata *msg) {
+static struct message_metadata *enter_combiner(struct combiner *cmb,
+                                               struct message_metadata *msg) {
   msg->next = NULL;
 
   struct message_metadata *prev =
@@ -221,8 +231,7 @@ static void remove_from_queue(struct message_metadata **queue,
         // CAS failed, wait for find->next and then go bananas
         while (!(next = next_list(find)))
           ;
-        // Ordered after next_list due to consume and data dependency
-        __atomic_store_n(&prev->next, next, __ATOMIC_RELAXED);
+        prev->next = next;
       }
     }
   }

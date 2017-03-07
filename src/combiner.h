@@ -9,7 +9,7 @@ typedef void (*combine_fn)(struct combine_message *msg);
 /// This struct holds the flat-combining lock
 struct combiner {
   struct message_metadata *queue;
-  int try_takeover;
+  struct message_metadata *takeover;
 };
 
 struct message_metadata {
