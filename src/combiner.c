@@ -71,8 +71,13 @@ int async_message_status(struct combine_message *msg) {
 void complete_async_message(struct combiner *cmb, struct combine_message *msg) {
   __atomic_store_n(&msg->_meta.blocking_status, 1, __ATOMIC_RELAXED);
   struct message_metadata *val;
-  while (!(val = __atomic_load_n(&msg->_meta.is_done, __ATOMIC_RELAXED)))
-    ;
+  while (!(val = __atomic_load_n(&msg->_meta.is_done, __ATOMIC_RELAXED))) {
+    if (__atomic_load_n(&cmb->takeover, __ATOMIC_RELAXED)) {
+      if ((val = __atomic_exchange_n(&cmb->takeover, NULL, __ATOMIC_RELAXED))) {
+        break;
+      }
+    }
+  }
   __atomic_thread_fence(__ATOMIC_ACQUIRE);
   if (val != Finished) {
     unlock_work_combiner(cmb, val, &msg->_meta, 1);
@@ -122,8 +127,12 @@ static void notify_waiters(struct combiner *cmb,
          cur = next_list(cur))
       ;
 
-    cur = cur ? cur : next;
+    if (cur) {
     __atomic_store_n(&cur->is_done, next, __ATOMIC_RELAXED);
+    }
+    else {
+      __atomic_store_n(&cmb->takeover, next, __ATOMIC_RELAXED);
+    }
   }
 }
 
